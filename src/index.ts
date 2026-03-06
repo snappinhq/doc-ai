@@ -253,3 +253,5 @@ export class SnappinDocAI {
         return { blocks: allBlocks, pageCount };
     }
 }
+
+export * from "./templates/invoice"
