@@ -254,4 +254,4 @@ export class SnappinDocAI {
     }
 }
 
-export * from "./templates/invoice"
+export type { InvoiceData } from "./templates/invoice"

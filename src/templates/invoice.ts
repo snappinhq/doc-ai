@@ -1,13 +1,14 @@
 import type { DocumentTemplate, TemplateFieldType } from "../lib/template.engine";
+import type { InferTemplate } from "../lib/template.engine";
 
 export const invoiceTemplate = {
   name: "invoice",
   description: "Standard invoice data extraction template",
   fields: [
     {
-      name: "invoiceNumber",
+      name: "invoiceId",
       type: "string" as TemplateFieldType,
-      description: "The invoice number, reference ID, or document number",
+      description: "The invoice number or id, reference ID, or document number",
     },
     {
       name: "invoiceDate",
@@ -21,11 +22,11 @@ export const invoiceTemplate = {
       optional: true as const,
     },
     {
-      name: "invoiceStatus",
+      name: "paymentStatus",
       type: "string" as TemplateFieldType,
       description: "Current status of the invoice if mentioned. Omit if not stated.",
       optional: true as const,
-      enum: ["paid", "unpaid", "overdue", "draft", "cancelled", "partial"] as const,
+      enum: ["paid", "unpaid", "partial", "refunded", "unknown"] as const,
     },
     {
       name: "paymentTerms",
@@ -190,7 +191,7 @@ export const invoiceTemplate = {
       enum: ["cash", "check", "credit_card", "debit_card", "paypal", "bank_transfer", "upi", "other"] as const,
     },
     {
-      name: "paymentLast4Digit",
+      name: "paymentLast4Digits",
       type: "string" as TemplateFieldType,
       description: "Last 4 digits of the card or account used for payment. Omit if not present.",
       optional: true as const,
@@ -228,4 +229,4 @@ export const invoiceTemplate = {
 } as const satisfies DocumentTemplate;
 
 /** Fully typed invoice output — use this in your application code */
-export type InvoiceData = import("../lib/template.engine").InferTemplate<typeof invoiceTemplate>;
+export type InvoiceData = InferTemplate<typeof invoiceTemplate>;
