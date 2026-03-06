@@ -1,6 +1,6 @@
 {
   "name": "@snappinhq/doc-ai",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "PDF → Structured JSON Data",
   "type": "module",
   "main": "dist/index.js",
