@@ -19,7 +19,7 @@ const VALID_EXTRACT_OUTPUT = {
         totalPages: 1,
         totalInvoices: 1,
         data: [{
-            invoiceNumber: "INV-001",
+            invoiceId: "INV-001",
             invoiceDate: "2024-01-01",
             vendorName: "Acme Corp",
             totalAmount: 500,
@@ -59,7 +59,7 @@ const {
                 totalPages: 1,
                 totalInvoices: 1,
                 data: [{
-                    invoiceNumber: "INV-001",
+                    invoiceId: "INV-001",
                     invoiceDate: "2024-01-01",
                     vendorName: "Acme Corp",
                     totalAmount: 500,
@@ -365,7 +365,7 @@ describe("SnappinDocAI – edge cases", () => {
     // ── Required Fields Validation ────────────────────────────────────────────
 
     describe("Required fields validation", () => {
-        it("throws REQUIRED_FIELDS_MISSING when invoiceNumber is absent", async () => {
+        it("throws REQUIRED_FIELDS_MISSING when invoiceId is absent", async () => {
             mockGenerateText.mockResolvedValue({
                 output: {
                     totalPages: 1,
@@ -384,7 +384,7 @@ describe("SnappinDocAI – edge cases", () => {
                 output: {
                     totalPages: 1,
                     totalInvoices: 1,
-                    data: [{ invoiceNumber: "INV-001", currency: "USD", vendorName: "Acme", invoiceDate: "2024-01-01", documentType: "invoice" }],
+                    data: [{ invoiceId: "INV-001", currency: "USD", vendorName: "Acme", invoiceDate: "2024-01-01", documentType: "invoice" }],
                 },
                 usage: {},
             });
@@ -403,7 +403,7 @@ describe("SnappinDocAI – edge cases", () => {
                 usage: {},
             });
             const err: DocAIError = await doc.extract(makePdfBuffer()).catch((e) => e);
-            expect(err.missingFields).toEqual(expect.arrayContaining(["invoiceNumber", "vendorName", "totalAmount", "currency"]));
+            expect(err.missingFields).toEqual(expect.arrayContaining(["invoiceId", "vendorName", "totalAmount", "currency"]));
         });
 
         it("throws REQUIRED_FIELDS_MISSING when a field is an empty string", async () => {
@@ -412,7 +412,7 @@ describe("SnappinDocAI – edge cases", () => {
                     totalPages: 1,
                     totalInvoices: 1,
                     data: [{
-                        invoiceNumber: "",   // empty string counts as missing
+                        invoiceId: "",   // empty string counts as missing
                         invoiceDate: "2024-01-01",
                         vendorName: "Acme",
                         totalAmount: 100,
@@ -424,7 +424,7 @@ describe("SnappinDocAI – edge cases", () => {
             });
             const err: DocAIError = await doc.extract(makePdfBuffer()).catch((e) => e);
             expect(err.code).toBe(DocAIErrorCode.REQUIRED_FIELDS_MISSING);
-            expect(err.missingFields).toContain("invoiceNumber");
+            expect(err.missingFields).toContain("invoiceId");
         });
 
         it("throws REQUIRED_FIELDS_MISSING when data array is empty", async () => {
@@ -439,7 +439,7 @@ describe("SnappinDocAI – edge cases", () => {
 
         it("passes when all required fields are present across multiple invoices", async () => {
             const entry = {
-                invoiceNumber: "INV-X",
+                invoiceId: "INV-X",
                 invoiceDate: "2024-01-01",
                 vendorName: "Vendor",
                 totalAmount: 999,
@@ -447,7 +447,7 @@ describe("SnappinDocAI – edge cases", () => {
                 documentType: "invoice",
             };
             mockGenerateText.mockResolvedValue({
-                output: { totalPages: 2, totalInvoices: 2, data: [entry, { ...entry, invoiceNumber: "INV-Y" }] },
+                output: { totalPages: 2, totalInvoices: 2, data: [entry, { ...entry, invoiceId: "INV-Y" }] },
                 usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
             });
             const result = await doc.extract(makePdfBuffer());
@@ -455,8 +455,8 @@ describe("SnappinDocAI – edge cases", () => {
         });
 
         it("throws REQUIRED_FIELDS_MISSING when one invoice in a batch is missing a field", async () => {
-            const good = { invoiceNumber: "INV-1", invoiceDate: "2024-01-01", vendorName: "V", totalAmount: 1, currency: "USD", documentType: "invoice" };
-            const bad  = { invoiceNumber: "",       invoiceDate: "2024-01-01", vendorName: "V", totalAmount: 1, currency: "USD", documentType: "invoice" };
+            const good = { invoiceId: "INV-1", invoiceDate: "2024-01-01", vendorName: "V", totalAmount: 1, currency: "USD", documentType: "invoice" };
+            const bad  = { invoiceId: "",       invoiceDate: "2024-01-01", vendorName: "V", totalAmount: 1, currency: "USD", documentType: "invoice" };
             mockGenerateText.mockResolvedValue({
                 output: { totalPages: 2, totalInvoices: 2, data: [good, bad] },
                 usage: {},
@@ -568,9 +568,9 @@ describe("SnappinDocAI – edge cases", () => {
         it("stores missingFields when provided", () => {
             const err = new DocAIError({
                 code: DocAIErrorCode.REQUIRED_FIELDS_MISSING,
-                missingFields: ["invoiceNumber", "currency"],
+                missingFields: ["invoiceId", "currency"],
             });
-            expect(err.missingFields).toEqual(["invoiceNumber", "currency"]);
+            expect(err.missingFields).toEqual(["invoiceId", "currency"]);
         });
 
         it("uses a custom message when provided", () => {
