@@ -118,294 +118,61 @@ function renderCleanText(pages) {
   }).join("\n\n");
 }
 
-// src/lib/template.engine.ts
-import { z } from "zod";
-import { zodToJsonSchema } from "zod-to-json-schema";
-function fieldToZod(field) {
-  const base = (() => {
-    if (field.enum && field.enum.length > 0) {
-      return z.enum(field.enum);
-    }
-    switch (field.type) {
-      case "string":
-        return z.string();
-      case "number":
-        return z.number();
-      case "boolean":
-        return z.boolean();
-      case "date":
-        return z.string();
-      // ISO date string
-      case "string[]":
-        return z.array(z.string());
-      case "number[]":
-        return z.array(z.number());
-      case "object[]": {
-        if (!field.fields?.length)
-          throw new Error(`object[] field "${field.name}" must define nested fields`);
-        const shape = {};
-        for (const nested of field.fields) {
-          shape[nested.name] = fieldToZod(nested);
-        }
-        return z.array(z.object(shape));
-      }
-      default:
-        return z.string();
-    }
-  })();
-  const described = base.describe(field.description);
-  return field.optional ? described.optional() : described;
-}
-var TemplateEngine = class _TemplateEngine {
-  static toZodSchema(template) {
-    const shape = {};
-    for (const field of template.fields) {
-      shape[field.name] = fieldToZod(field);
-    }
-    return z.object(shape);
-  }
-  static toOutputSchema(template) {
-    const itemSchema = _TemplateEngine.toZodSchema(template);
-    const outputSchema = z.object({
-      totalPages: z.number().describe("Total number of pages in the PDF document"),
-      totalInvoices: z.number().describe("Total number of individual invoices detected across all pages"),
-      data: z.array(itemSchema).describe("One entry per detected invoice in document order")
-    });
-    const jsonSchema = zodToJsonSchema(outputSchema, {
-      name: template.name,
-      errorMessages: true
-    });
-    return {
-      zod: outputSchema,
-      jsonSchema,
-      jsonSchemaString: JSON.stringify(jsonSchema, null, 2)
-    };
-  }
-};
-
 // src/templates/invoice.ts
-var invoiceTemplate = {
-  name: "invoice",
-  description: "Standard invoice data extraction template",
-  fields: [
-    {
-      name: "invoiceNumber",
-      type: "string",
-      description: "The invoice number, reference ID, or document number"
-    },
-    {
-      name: "invoiceDate",
-      type: "date",
-      description: "The date the invoice was issued, in ISO 8601 format (YYYY-MM-DD)"
-    },
-    {
-      name: "dueDate",
-      type: "date",
-      description: "Payment due date in ISO 8601 format (YYYY-MM-DD). Omit if not present.",
-      optional: true
-    },
-    {
-      name: "invoiceStatus",
-      type: "string",
-      description: "Current status of the invoice if mentioned. Omit if not stated.",
-      optional: true,
-      enum: ["paid", "unpaid", "overdue", "draft", "cancelled", "partial"]
-    },
-    {
-      name: "paymentTerms",
-      type: "string",
-      description: "Payment terms as stated on the invoice. Omit if not present.",
-      optional: true
-    },
-    {
-      name: "vendorName",
-      type: "string",
-      description: "Full legal name of the company or individual issuing the invoice"
-    },
-    {
-      name: "vendorAddress",
-      type: "string",
-      description: "Full mailing address of the vendor/seller",
-      optional: true
-    },
-    {
-      name: "vendorEmail",
-      type: "string",
-      description: "Email address of the vendor, if present",
-      optional: true
-    },
-    {
-      name: "vendorWebsite",
-      type: "string",
-      description: "Website URL of the vendor, if present",
-      optional: true
-    },
-    {
-      name: "vendorPhone",
-      type: "string",
-      description: "Phone number of the vendor, if present",
-      optional: true
-    },
-    {
-      name: "vendorTaxId",
-      type: "string",
-      description: "Vendor's tax identification number. Omit if not present.",
-      optional: true
-    },
-    {
-      name: "vendorRegId",
-      type: "string",
-      description: "Vendor's business registration number. Omit if not present.",
-      optional: true
-    },
-    {
-      name: "clientName",
-      type: "string",
-      description: "Full name of the client or customer being billed",
-      optional: true
-    },
-    {
-      name: "clientEmail",
-      type: "string",
-      description: "Email address of the client, if present",
-      optional: true
-    },
-    {
-      name: "clientAddress",
-      type: "string",
-      description: "Full mailing address of the client",
-      optional: true
-    },
-    {
-      name: "clientTaxId",
-      type: "string",
-      description: "Client's tax identification number. Omit if not present.",
-      optional: true
-    },
-    {
-      name: "lineItems",
-      type: "object[]",
-      description: "All line items found in the invoice",
-      optional: true,
-      fields: [
-        {
-          name: "description",
-          type: "string",
-          description: "Name or description of the product or service",
-          optional: true
-        },
-        {
-          name: "quantity",
-          type: "number",
-          description: "The quantity of units",
-          optional: true
-        },
-        {
-          name: "unitPrice",
-          type: "number",
-          description: "Price per unit as a plain number, no currency symbol",
-          optional: true
-        },
-        {
-          name: "taxRate",
-          type: "number",
-          description: "Tax rate for this line item as a percentage (e.g. 18 for 18%)",
-          optional: true
-        },
-        {
-          name: "tax",
-          type: "number",
-          description: "Tax amount for this line item as a plain number",
-          optional: true
-        },
-        {
-          name: "discount",
-          type: "number",
-          description: "Discount applied to this line item as a plain number",
-          optional: true
-        },
-        {
-          name: "total",
-          type: "number",
-          description: "Total for this line item including tax, after discount, as a plain number",
-          optional: true
-        }
-      ]
-    },
-    {
-      name: "subtotal",
-      type: "number",
-      description: "Sum of all line items before tax or discounts, as a plain number",
-      optional: true
-    },
-    {
-      name: "taxRate",
-      type: "number",
-      description: "Overall tax rate as a percentage (e.g. 18 for 18%). Omit if not stated.",
-      optional: true
-    },
-    {
-      name: "taxAmount",
-      type: "number",
-      description: "Total tax amount applied to the invoice as a plain number",
-      optional: true
-    },
-    {
-      name: "discountAmount",
-      type: "number",
-      description: "Total discount applied as a plain number",
-      optional: true
-    },
-    {
-      name: "totalAmount",
-      type: "number",
-      description: "Final total amount due including tax and after discounts, as a plain number"
-    },
-    {
-      name: "currency",
-      type: "string",
-      description: "ISO 4217 currency code. Never return symbols. Only the 3-letter code"
-    },
-    {
-      name: "paymentMethod",
-      type: "string",
-      description: "Payment method used or specified on the invoice. Omit if not mentioned.",
-      optional: true,
-      enum: ["cash", "check", "credit_card", "debit_card", "paypal", "bank_transfer", "upi", "other"]
-    },
-    {
-      name: "paymentLast4Digit",
-      type: "string",
-      description: "Last 4 digits of the card or account used for payment. Omit if not present.",
-      optional: true
-    },
-    {
-      name: "documentType",
-      type: "string",
-      description: "The type of document detected.",
-      enum: ["invoice", "receipt"]
-    },
-    {
-      name: "billingFrequency",
-      type: "string",
-      description: "How often the subscription is billed. Only populate if documentType is subscription or the document mentions recurring billing. Omit otherwise.",
-      optional: true,
-      enum: ["daily", "weekly", "monthly", "quarterly", "yearly"]
-    },
-    {
-      name: "nextBillingDate",
-      type: "date",
-      description: "The next scheduled billing or renewal date in ISO 8601 format (YYYY-MM-DD). Omit if not present.",
-      optional: true
-    },
-    {
-      name: "summary",
-      type: "string",
-      description: "A concise 5\u20138 word human-readable summary describing vendor and purpose (e.g. 'Vi postpaid mobile bill payment', 'Monthly subscription payment for Adobe').",
-      optional: true
-    }
-  ]
-};
+import { z } from "zod";
+var ZInvoiceLineItem = z.object({
+  description: z.string().optional(),
+  quantity: z.number().optional(),
+  unitPrice: z.number().optional(),
+  taxRate: z.number().optional(),
+  tax: z.number().optional(),
+  discount: z.number().optional(),
+  total: z.number().optional()
+});
+var ZInvoiceData = z.object({
+  // Required
+  invoiceId: z.string().describe("The invoice number or id, reference ID, or document number"),
+  invoiceDate: z.string().describe("The date the invoice was issued, in ISO 8601 format (YYYY-MM-DD)"),
+  vendorName: z.string().describe("Full legal name of the company or individual issuing the invoice"),
+  totalAmount: z.number().describe("Final total amount due including tax and after discounts, as a plain number"),
+  currency: z.string().describe("ISO 4217 currency code. Never return symbols. Only the 3-letter code"),
+  documentType: z.enum(["invoice", "receipt"]).describe("The type of document detected"),
+  // Optional — dates
+  dueDate: z.string().optional().describe("Payment due date in ISO 8601 format (YYYY-MM-DD). Omit if not present."),
+  nextBillingDate: z.string().optional().describe("The next scheduled billing or renewal date in ISO 8601 format (YYYY-MM-DD). Omit if not present."),
+  // Optional — payment
+  paymentStatus: z.enum(["paid", "unpaid", "partial", "refunded"]).optional().describe("Current status of the invoice if mentioned. Omit if not stated."),
+  paymentTerms: z.string().optional().describe("Payment terms as stated on the invoice. Omit if not present."),
+  paymentMethod: z.enum(["cash", "check", "credit_card", "debit_card", "paypal", "bank_transfer", "upi", "other"]).optional().describe("Payment method used or specified on the invoice. Omit if not mentioned."),
+  paymentLast4Digits: z.string().optional().describe("Last 4 digits of the card or account used for payment. Omit if not present."),
+  // Optional — vendor
+  vendorAddress: z.string().optional().describe("Full mailing address of the vendor/seller"),
+  vendorEmail: z.string().optional().describe("Email address of the vendor, if present"),
+  vendorWebsite: z.string().optional().describe("Website URL of the vendor, if present"),
+  vendorPhone: z.string().optional().describe("Phone number of the vendor, if present"),
+  vendorTaxId: z.string().optional().describe("Vendor's tax identification number. Omit if not present."),
+  vendorRegId: z.string().optional().describe("Vendor's business registration number. Omit if not present."),
+  // Optional — client
+  clientName: z.string().optional().describe("Full name of the client or customer being billed"),
+  clientEmail: z.string().optional().describe("Email address of the client, if present"),
+  clientAddress: z.string().optional().describe("Full mailing address of the client"),
+  clientTaxId: z.string().optional().describe("Client's tax identification number. Omit if not present."),
+  // Optional — totals
+  subtotal: z.number().optional().describe("Sum of all line items before tax or discounts, as a plain number"),
+  taxRate: z.number().optional().describe("Overall tax rate as a percentage (e.g. 18 for 18%). Omit if not stated."),
+  taxAmount: z.number().optional().describe("Total tax amount applied to the invoice as a plain number"),
+  discountAmount: z.number().optional().describe("Total discount applied as a plain number"),
+  // Optional — subscription
+  billingFrequency: z.enum(["daily", "weekly", "monthly", "quarterly", "yearly"]).optional().describe("How often the subscription is billed. Only populate if document mentions recurring billing. Omit otherwise."),
+  // Optional — misc
+  summary: z.string().optional().describe("A concise 5-8 word human-readable summary describing vendor and purpose"),
+  lineItems: z.array(ZInvoiceLineItem).optional().describe("All line items found in the invoice")
+});
+var ZExtractionOutput = z.object({
+  totalPages: z.number().describe("Total number of pages in the PDF document"),
+  totalInvoices: z.number().describe("Total number of individual invoices detected across all pages"),
+  data: z.array(ZInvoiceData).describe("One entry per detected invoice in document order")
+});
 
 // src/prompt.ts
 var BASE_EXTRACTION_PROMPT = `
@@ -535,6 +302,7 @@ function remapGeminiError(err) {
 }
 
 // src/index.ts
+var REQUIRED_FIELDS = Object.entries(ZInvoiceData.shape).filter(([, field]) => !field.isOptional()).map(([key]) => key);
 var SnappinDocAI = class {
   textractClient;
   google;
@@ -556,9 +324,7 @@ var SnappinDocAI = class {
   async extract(buffer, options = {}) {
     validateBuffer(buffer);
     const totalStart = Date.now();
-    const { template = invoiceTemplate, featureTypes = ["TABLES", "FORMS"] } = options;
-    const { zod: outputSchema } = TemplateEngine.toOutputSchema(template);
-    const requiredFields = template.fields.filter((f) => !("optional" in f && f.optional)).map((f) => f.name);
+    const { featureTypes = ["TABLES", "FORMS"] } = options;
     let blocks;
     let pageCount;
     try {
@@ -581,7 +347,7 @@ var SnappinDocAI = class {
         maxOutputTokens: 4e3,
         system: BASE_EXTRACTION_PROMPT,
         prompt: JSON.stringify(cleaned),
-        experimental_output: Output.object({ schema: outputSchema })
+        experimental_output: Output.object({ schema: ZExtractionOutput })
       });
       var geminiDurationMs = Date.now() - normalizeStart;
     } catch (err) {
@@ -592,7 +358,7 @@ var SnappinDocAI = class {
       throw new DocAIError({ code: DocAIErrorCode.EXTRACTION_FAILED });
     }
     const finalOutput = normalizeResult.output;
-    const missingFields = this._getMissingFields(finalOutput.data, requiredFields);
+    const missingFields = this._getMissingFields(finalOutput.data, REQUIRED_FIELDS);
     if (missingFields.length > 0) {
       throw new DocAIError({
         code: DocAIErrorCode.REQUIRED_FIELDS_MISSING,
@@ -618,7 +384,6 @@ var SnappinDocAI = class {
     };
   }
   // ── Private helpers ───────────────────────────────────────────────────────
-  /** Returns field names that are missing or empty across ALL data entries */
   _getMissingFields(data, requiredFields) {
     if (!data || data.length === 0) return requiredFields;
     return requiredFields.filter(
@@ -627,16 +392,6 @@ var SnappinDocAI = class {
         return val === void 0 || val === null || val === "";
       })
     );
-  }
-  async _getPageCount(buffer) {
-    try {
-      const pdfDoc = await PDFDocument.load(buffer, {
-        ignoreEncryption: false
-      });
-      return pdfDoc.getPageCount();
-    } catch (err) {
-      remapPdfError(err);
-    }
   }
   async _runTextract(buffer, featureTypes) {
     let pdfDoc;
@@ -675,5 +430,7 @@ export {
   DocAIError,
   DocAIErrorCode,
   SnappinDocAI,
-  invoiceTemplate
+  ZExtractionOutput,
+  ZInvoiceData,
+  ZInvoiceLineItem
 };
