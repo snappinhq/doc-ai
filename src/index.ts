@@ -9,8 +9,7 @@ import { generateText, Output } from "ai";
 import { PDFDocument } from "pdf-lib";
 
 import { cleanTextractOutput } from "./lib/textract.cleaner";
-import { InferTemplate, TemplateEngine, type DocumentTemplate } from "./lib/template.engine";
-import { invoiceTemplate } from "./templates/invoice";
+import { ZExtractionOutput, ZInvoiceData } from "./templates/invoice";
 import { BASE_EXTRACTION_PROMPT } from "./prompt";
 import { parseCredentials } from "./lib/parseCredentials";
 import {
@@ -22,10 +21,10 @@ import {
     remapGeminiError,
 } from "./errors";
 
-export type { DocumentTemplate, TemplateField, TemplateFieldType } from "./lib/template.engine";
 export type { CleanedTextractOutput } from "./lib/textract.cleaner";
-export { invoiceTemplate } from "./templates/invoice";
 export { DocAIError, DocAIErrorCode } from "./errors";
+export { ZInvoiceData, ZExtractionOutput, ZInvoiceLineItem } from "./templates/invoice";
+export type { InvoiceData, InvoiceLineItem } from "./templates/invoice";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -48,30 +47,35 @@ export interface SnappinDocAIConfig {
     textract: TextractConfig;
 }
 
-export interface ExtractionOptions<T extends DocumentTemplate = typeof invoiceTemplate> {
-    template?: T;
+export interface ExtractionOptions {
     featureTypes?: ("TABLES" | "FORMS" | "SIGNATURES" | "LAYOUT")[];
 }
 
-export interface ExtractionOutput<TData = Record<string, unknown>> {
-    totalPages: number;
+export interface ExtractionResult {
+    totalPages:    number;
     totalInvoices: number;
-    data: TData[];
+    data:          import("./templates/invoice").InvoiceData[];
     usage: {
-        inputTokens: number;
+        inputTokens:  number;
         outputTokens: number;
-        totalTokens: number;
+        totalTokens:  number;
     };
     metrics: {
-        totalDurationMs: number;
+        totalDurationMs:    number;
         textractDurationMs: number;
-        geminiDurationMs: number;
-        pagesProcessed: number;
-        textractCallCount: number;
-        cleanedTextLength: number;
+        geminiDurationMs:   number;
+        pagesProcessed:     number;
+        textractCallCount:  number;
+        cleanedTextLength:  number;
         pipeline: "textract_then_gemini";
     };
 }
+
+// ─── Required fields derived from Zod schema ─────────────────────────────────
+
+const REQUIRED_FIELDS = Object.entries(ZInvoiceData.shape)
+    .filter(([, field]) => !field.isOptional())
+    .map(([key]) => key);
 
 // ─── Class ────────────────────────────────────────────────────────────────────
 
@@ -83,43 +87,38 @@ export class SnappinDocAI {
         this.textractClient = new TextractClient({
             region: textract.region,
             credentials: {
-                accessKeyId: textract.credentials.accessKeyId,
+                accessKeyId:     textract.credentials.accessKeyId,
                 secretAccessKey: textract.credentials.secretAccessKey,
             },
         });
 
         const credentials = parseCredentials(vertex.credentials);
         this.google = createVertex({
-            project: vertex.projectId,
-            location: vertex.location ?? "us-central1",
+            project:           vertex.projectId,
+            location:          vertex.location ?? "us-central1",
             googleAuthOptions: { credentials },
         });
     }
 
-    async extract<T extends DocumentTemplate = typeof invoiceTemplate>(
+    async extract(
         buffer: Buffer | Uint8Array,
-        options: ExtractionOptions<T> = {}
-    ): Promise<ExtractionOutput<InferTemplate<T>>> {
-        // ── Validate ────────────────────────────────────────────────────────
+        options: ExtractionOptions = {}
+    ): Promise<ExtractionResult> {
+        // ── Validate ──────────────────────────────────────────────────────────
         validateBuffer(buffer);
 
         const totalStart = Date.now();
-        const { template = invoiceTemplate, featureTypes = ["TABLES", "FORMS"] } = options;
-        const { zod: outputSchema } = TemplateEngine.toOutputSchema(template);
+        const { featureTypes = ["TABLES", "FORMS"] } = options;
 
-        const requiredFields = template.fields
-            .filter((f) => !('optional' in f && f.optional))
-            .map((f) => f.name);
-
-        // ── Stage 1: Textract ────────────────────────────────────────────────
+        // ── Stage 1: Textract ─────────────────────────────────────────────────
         let blocks: Block[];
         let pageCount: number;
 
         try {
-            const textractStart = Date.now();
+            const textractStart  = Date.now();
             const textractResult = await this._runTextract(buffer, featureTypes);
-            blocks = textractResult.blocks;
-            pageCount = textractResult.pageCount;
+            blocks               = textractResult.blocks;
+            pageCount            = textractResult.pageCount;
             var textractDurationMs = Date.now() - textractStart;
         } catch (err) {
             if (err instanceof DocAIError) throw err;
@@ -128,18 +127,18 @@ export class SnappinDocAI {
 
         const cleaned = cleanTextractOutput(blocks!);
 
-        // ── Stage 2: Gemini normalize ────────────────────────────────────────
+        // ── Stage 2: Gemini normalize ─────────────────────────────────────────
         let normalizeResult: Awaited<ReturnType<typeof generateText>>;
 
         try {
             const normalizeStart = Date.now();
             normalizeResult = await generateText({
-                model: this.google("gemini-2.0-flash-lite"),
-                topP: 0,
-                maxOutputTokens: 4000,
-                system: BASE_EXTRACTION_PROMPT,
-                prompt: JSON.stringify(cleaned),
-                experimental_output: Output.object({ schema: outputSchema }),
+                model:               this.google("gemini-2.0-flash-lite"),
+                topP:                0,
+                maxOutputTokens:     4000,
+                system:              BASE_EXTRACTION_PROMPT,
+                prompt:              JSON.stringify(cleaned),
+                experimental_output: Output.object({ schema: ZExtractionOutput }),
             });
             var geminiDurationMs = Date.now() - normalizeStart;
         } catch (err) {
@@ -151,10 +150,10 @@ export class SnappinDocAI {
             throw new DocAIError({ code: DocAIErrorCode.EXTRACTION_FAILED });
         }
 
-        const finalOutput = normalizeResult!.output as ExtractionOutput<InferTemplate<T>>;
+        const finalOutput = normalizeResult!.output;
 
-        // ── Required fields check ────────────────────────────────────────────
-        const missingFields = this._getMissingFields(finalOutput.data, requiredFields);
+        // ── Required fields check ─────────────────────────────────────────────
+        const missingFields = this._getMissingFields(finalOutput.data, REQUIRED_FIELDS);
         if (missingFields.length > 0) {
             throw new DocAIError({
                 code: DocAIErrorCode.REQUIRED_FIELDS_MISSING,
@@ -165,25 +164,24 @@ export class SnappinDocAI {
         return {
             ...finalOutput,
             usage: {
-                inputTokens: normalizeResult!.usage.inputTokens ?? 0,
+                inputTokens:  normalizeResult!.usage.inputTokens  ?? 0,
                 outputTokens: normalizeResult!.usage.outputTokens ?? 0,
-                totalTokens: normalizeResult!.usage.totalTokens ?? 0,
+                totalTokens:  normalizeResult!.usage.totalTokens  ?? 0,
             },
             metrics: {
-                totalDurationMs: Date.now() - totalStart,
+                totalDurationMs:    Date.now() - totalStart,
                 textractDurationMs: textractDurationMs!,
-                geminiDurationMs: geminiDurationMs!,
-                pagesProcessed: pageCount!,
-                textractCallCount: pageCount!,
-                cleanedTextLength: cleaned.text.length,
-                pipeline: "textract_then_gemini",
+                geminiDurationMs:   geminiDurationMs!,
+                pagesProcessed:     pageCount!,
+                textractCallCount:  pageCount!,
+                cleanedTextLength:  cleaned.text.length,
+                pipeline:           "textract_then_gemini",
             },
         };
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /** Returns field names that are missing or empty across ALL data entries */
     private _getMissingFields(
         data: unknown[],
         requiredFields: string[]
@@ -198,17 +196,6 @@ export class SnappinDocAI {
         );
     }
 
-    private async _getPageCount(buffer: Buffer | Uint8Array): Promise<number> {
-        try {
-            const pdfDoc = await PDFDocument.load(buffer, {
-                ignoreEncryption: false,
-            });
-            return pdfDoc.getPageCount();
-        } catch (err) {
-            remapPdfError(err);
-        }
-    }
-
     private async _runTextract(
         buffer: Buffer | Uint8Array,
         featureTypes: ExtractionOptions["featureTypes"]
@@ -221,18 +208,18 @@ export class SnappinDocAI {
             remapPdfError(err);
         }
 
-        const pageCount = pdfDoc!.getPageCount();
+        const pageCount  = pdfDoc!.getPageCount();
         const allBlocks: Block[] = [];
 
         for (let i = 0; i < pageCount; i++) {
             try {
-                const singlePage = await PDFDocument.create();
-                const [copiedPage] = await singlePage.copyPages(pdfDoc!, [i]);
+                const singlePage      = await PDFDocument.create();
+                const [copiedPage]    = await singlePage.copyPages(pdfDoc!, [i]);
                 singlePage.addPage(copiedPage);
-                const pageBytes = await singlePage.save();
+                const pageBytes       = await singlePage.save();
 
                 const command = new AnalyzeDocumentCommand({
-                    Document: { Bytes: pageBytes },
+                    Document:     { Bytes: pageBytes },
                     FeatureTypes: featureTypes as FeatureType[],
                 });
 
@@ -253,5 +240,3 @@ export class SnappinDocAI {
         return { blocks: allBlocks, pageCount };
     }
 }
-
-export type { InvoiceData } from "./templates/invoice"
