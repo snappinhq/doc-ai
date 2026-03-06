@@ -388,7 +388,7 @@ var invoiceTemplate = {
     {
       name: "currency",
       type: "string",
-      description: "ISO 4217 currency code"
+      description: "ISO 4217 currency code. Never return symbols. Only the 3-letter code"
     },
     {
       name: "paymentMethod",

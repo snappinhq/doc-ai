@@ -190,7 +190,7 @@ declare const invoiceTemplate: {
     }, {
         readonly name: "currency";
         readonly type: TemplateFieldType;
-        readonly description: "ISO 4217 currency code";
+        readonly description: "ISO 4217 currency code. Never return symbols. Only the 3-letter code";
     }, {
         readonly name: "paymentMethod";
         readonly type: TemplateFieldType;
