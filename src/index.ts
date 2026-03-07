@@ -26,8 +26,6 @@ export { DocAIError, DocAIErrorCode } from "./errors";
 export { ZInvoiceData, ZExtractionOutput, ZInvoiceLineItem } from "./templates/invoice";
 export type { InvoiceData, InvoiceLineItem } from "./templates/invoice";
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
 export interface TextractConfig {
     region: string;
     credentials: {
