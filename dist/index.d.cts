@@ -3,7 +3,7 @@ import { TextractClient } from '@aws-sdk/client-textract';
 import { createVertex } from '@ai-sdk/google-vertex';
 
 declare const ZInvoiceLineItem: z.ZodObject<{
-    description: z.ZodOptional<z.ZodString>;
+    description: z.ZodOptional<z.ZodNullable<z.ZodString>>;
     quantity: z.ZodOptional<z.ZodNumber>;
     unitPrice: z.ZodOptional<z.ZodNumber>;
     taxRate: z.ZodOptional<z.ZodNumber>;
@@ -12,7 +12,7 @@ declare const ZInvoiceLineItem: z.ZodObject<{
     total: z.ZodOptional<z.ZodNumber>;
 }, "strip", z.ZodTypeAny, {
     taxRate?: number | undefined;
-    description?: string | undefined;
+    description?: string | null | undefined;
     quantity?: number | undefined;
     unitPrice?: number | undefined;
     tax?: number | undefined;
@@ -20,7 +20,7 @@ declare const ZInvoiceLineItem: z.ZodObject<{
     total?: number | undefined;
 }, {
     taxRate?: number | undefined;
-    description?: string | undefined;
+    description?: string | null | undefined;
     quantity?: number | undefined;
     unitPrice?: number | undefined;
     tax?: number | undefined;
@@ -57,7 +57,7 @@ declare const ZInvoiceData: z.ZodObject<{
     billingFrequency: z.ZodOptional<z.ZodEnum<["daily", "weekly", "monthly", "quarterly", "yearly"]>>;
     summary: z.ZodOptional<z.ZodString>;
     lineItems: z.ZodOptional<z.ZodArray<z.ZodObject<{
-        description: z.ZodOptional<z.ZodString>;
+        description: z.ZodOptional<z.ZodNullable<z.ZodString>>;
         quantity: z.ZodOptional<z.ZodNumber>;
         unitPrice: z.ZodOptional<z.ZodNumber>;
         taxRate: z.ZodOptional<z.ZodNumber>;
@@ -66,7 +66,7 @@ declare const ZInvoiceData: z.ZodObject<{
         total: z.ZodOptional<z.ZodNumber>;
     }, "strip", z.ZodTypeAny, {
         taxRate?: number | undefined;
-        description?: string | undefined;
+        description?: string | null | undefined;
         quantity?: number | undefined;
         unitPrice?: number | undefined;
         tax?: number | undefined;
@@ -74,7 +74,7 @@ declare const ZInvoiceData: z.ZodObject<{
         total?: number | undefined;
     }, {
         taxRate?: number | undefined;
-        description?: string | undefined;
+        description?: string | null | undefined;
         quantity?: number | undefined;
         unitPrice?: number | undefined;
         tax?: number | undefined;
@@ -112,7 +112,7 @@ declare const ZInvoiceData: z.ZodObject<{
     summary?: string | undefined;
     lineItems?: {
         taxRate?: number | undefined;
-        description?: string | undefined;
+        description?: string | null | undefined;
         quantity?: number | undefined;
         unitPrice?: number | undefined;
         tax?: number | undefined;
@@ -150,7 +150,7 @@ declare const ZInvoiceData: z.ZodObject<{
     summary?: string | undefined;
     lineItems?: {
         taxRate?: number | undefined;
-        description?: string | undefined;
+        description?: string | null | undefined;
         quantity?: number | undefined;
         unitPrice?: number | undefined;
         tax?: number | undefined;
@@ -158,7 +158,7 @@ declare const ZInvoiceData: z.ZodObject<{
         total?: number | undefined;
     }[] | undefined;
 }>;
-declare const ZExtractionOutput: z.ZodObject<{
+declare const ZExtractionOutput: z.ZodEffects<z.ZodObject<{
     totalPages: z.ZodNumber;
     totalInvoices: z.ZodNumber;
     data: z.ZodArray<z.ZodObject<{
@@ -191,7 +191,7 @@ declare const ZExtractionOutput: z.ZodObject<{
         billingFrequency: z.ZodOptional<z.ZodEnum<["daily", "weekly", "monthly", "quarterly", "yearly"]>>;
         summary: z.ZodOptional<z.ZodString>;
         lineItems: z.ZodOptional<z.ZodArray<z.ZodObject<{
-            description: z.ZodOptional<z.ZodString>;
+            description: z.ZodOptional<z.ZodNullable<z.ZodString>>;
             quantity: z.ZodOptional<z.ZodNumber>;
             unitPrice: z.ZodOptional<z.ZodNumber>;
             taxRate: z.ZodOptional<z.ZodNumber>;
@@ -200,7 +200,7 @@ declare const ZExtractionOutput: z.ZodObject<{
             total: z.ZodOptional<z.ZodNumber>;
         }, "strip", z.ZodTypeAny, {
             taxRate?: number | undefined;
-            description?: string | undefined;
+            description?: string | null | undefined;
             quantity?: number | undefined;
             unitPrice?: number | undefined;
             tax?: number | undefined;
@@ -208,7 +208,7 @@ declare const ZExtractionOutput: z.ZodObject<{
             total?: number | undefined;
         }, {
             taxRate?: number | undefined;
-            description?: string | undefined;
+            description?: string | null | undefined;
             quantity?: number | undefined;
             unitPrice?: number | undefined;
             tax?: number | undefined;
@@ -246,7 +246,7 @@ declare const ZExtractionOutput: z.ZodObject<{
         summary?: string | undefined;
         lineItems?: {
             taxRate?: number | undefined;
-            description?: string | undefined;
+            description?: string | null | undefined;
             quantity?: number | undefined;
             unitPrice?: number | undefined;
             tax?: number | undefined;
@@ -284,7 +284,7 @@ declare const ZExtractionOutput: z.ZodObject<{
         summary?: string | undefined;
         lineItems?: {
             taxRate?: number | undefined;
-            description?: string | undefined;
+            description?: string | null | undefined;
             quantity?: number | undefined;
             unitPrice?: number | undefined;
             tax?: number | undefined;
@@ -324,7 +324,7 @@ declare const ZExtractionOutput: z.ZodObject<{
         summary?: string | undefined;
         lineItems?: {
             taxRate?: number | undefined;
-            description?: string | undefined;
+            description?: string | null | undefined;
             quantity?: number | undefined;
             unitPrice?: number | undefined;
             tax?: number | undefined;
@@ -366,7 +366,91 @@ declare const ZExtractionOutput: z.ZodObject<{
         summary?: string | undefined;
         lineItems?: {
             taxRate?: number | undefined;
-            description?: string | undefined;
+            description?: string | null | undefined;
+            quantity?: number | undefined;
+            unitPrice?: number | undefined;
+            tax?: number | undefined;
+            discount?: number | undefined;
+            total?: number | undefined;
+        }[] | undefined;
+    }[];
+    totalPages: number;
+    totalInvoices: number;
+}>, {
+    data: {
+        invoiceId: string;
+        invoiceDate: string;
+        vendorName: string;
+        totalAmount: number;
+        currency: string;
+        documentType: "invoice" | "receipt";
+        dueDate?: string | undefined;
+        nextBillingDate?: string | undefined;
+        paymentStatus?: "paid" | "unpaid" | "partial" | "refunded" | undefined;
+        paymentTerms?: string | undefined;
+        paymentMethod?: "cash" | "check" | "credit_card" | "debit_card" | "paypal" | "bank_transfer" | "upi" | "other" | undefined;
+        paymentLast4Digits?: string | undefined;
+        vendorAddress?: string | undefined;
+        vendorEmail?: string | undefined;
+        vendorWebsite?: string | undefined;
+        vendorPhone?: string | undefined;
+        vendorTaxId?: string | undefined;
+        vendorRegId?: string | undefined;
+        clientName?: string | undefined;
+        clientEmail?: string | undefined;
+        clientAddress?: string | undefined;
+        clientTaxId?: string | undefined;
+        subtotal?: number | undefined;
+        taxRate?: number | undefined;
+        taxAmount?: number | undefined;
+        discountAmount?: number | undefined;
+        billingFrequency?: "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | undefined;
+        summary?: string | undefined;
+        lineItems?: {
+            taxRate?: number | undefined;
+            description?: string | null | undefined;
+            quantity?: number | undefined;
+            unitPrice?: number | undefined;
+            tax?: number | undefined;
+            discount?: number | undefined;
+            total?: number | undefined;
+        }[] | undefined;
+    }[];
+    totalPages: number;
+    totalInvoices: number;
+}, {
+    data: {
+        invoiceId: string;
+        invoiceDate: string;
+        vendorName: string;
+        totalAmount: number;
+        currency: string;
+        documentType: "invoice" | "receipt";
+        dueDate?: string | undefined;
+        nextBillingDate?: string | undefined;
+        paymentStatus?: "paid" | "unpaid" | "partial" | "refunded" | undefined;
+        paymentTerms?: string | undefined;
+        paymentMethod?: "cash" | "check" | "credit_card" | "debit_card" | "paypal" | "bank_transfer" | "upi" | "other" | undefined;
+        paymentLast4Digits?: string | undefined;
+        vendorAddress?: string | undefined;
+        vendorEmail?: string | undefined;
+        vendorWebsite?: string | undefined;
+        vendorPhone?: string | undefined;
+        vendorTaxId?: string | undefined;
+        vendorRegId?: string | undefined;
+        clientName?: string | undefined;
+        clientEmail?: string | undefined;
+        clientAddress?: string | undefined;
+        clientTaxId?: string | undefined;
+        subtotal?: number | undefined;
+        taxRate?: number | undefined;
+        taxAmount?: number | undefined;
+        discountAmount?: number | undefined;
+        billingFrequency?: "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | undefined;
+        summary?: string | undefined;
+        lineItems?: {
+            taxRate?: number | undefined;
+            description?: string | null | undefined;
             quantity?: number | undefined;
             unitPrice?: number | undefined;
             tax?: number | undefined;

@@ -147,21 +147,21 @@ function renderCleanText(pages) {
 // src/templates/invoice.ts
 var import_zod = require("zod");
 var ZInvoiceLineItem = import_zod.z.object({
-  description: import_zod.z.string().optional(),
-  quantity: import_zod.z.number().optional(),
-  unitPrice: import_zod.z.number().optional(),
-  taxRate: import_zod.z.number().optional(),
-  tax: import_zod.z.number().optional(),
-  discount: import_zod.z.number().optional(),
-  total: import_zod.z.number().optional()
+  description: import_zod.z.string().nullable().optional().describe("Name or description of the product or service"),
+  quantity: import_zod.z.number().optional().describe("Quantity of units for this line item"),
+  unitPrice: import_zod.z.number().optional().describe("Price per unit."),
+  taxRate: import_zod.z.number().optional().describe("Tax rate as a percentage for this line item (e.g. 18 for 18%). Omit if not stated."),
+  tax: import_zod.z.number().optional().describe("Tax amount for this line item in minor units."),
+  discount: import_zod.z.number().optional().describe("Discount applied to this line item."),
+  total: import_zod.z.number().optional().describe("Total amount for this line item after tax and discount.")
 });
 var ZInvoiceData = import_zod.z.object({
   // Required
   invoiceId: import_zod.z.string().describe("The invoice number or id, reference ID, or document number"),
   invoiceDate: import_zod.z.string().describe("The date the invoice was issued, in ISO 8601 format (YYYY-MM-DD)"),
   vendorName: import_zod.z.string().describe("Full legal name of the company or individual issuing the invoice"),
-  totalAmount: import_zod.z.number().describe("Final total amount due including tax and after discounts, as a plain number"),
-  currency: import_zod.z.string().describe("ISO 4217 currency code. Never return symbols. Only the 3-letter code"),
+  totalAmount: import_zod.z.number().describe("Final total amount due including tax and after discounts."),
+  currency: import_zod.z.string().describe("Return ISO 4217 currency code only (e.g., USD, INR, EUR)"),
   documentType: import_zod.z.enum(["invoice", "receipt"]).describe("The type of document detected"),
   // Optional — dates
   dueDate: import_zod.z.string().optional().describe("Payment due date in ISO 8601 format (YYYY-MM-DD). Omit if not present."),
@@ -184,21 +184,36 @@ var ZInvoiceData = import_zod.z.object({
   clientAddress: import_zod.z.string().optional().describe("Full mailing address of the client"),
   clientTaxId: import_zod.z.string().optional().describe("Client's tax identification number. Omit if not present."),
   // Optional — totals
-  subtotal: import_zod.z.number().optional().describe("Sum of all line items before tax or discounts, as a plain number"),
+  subtotal: import_zod.z.number().optional().describe("Sum of all line items before tax or discounts."),
   taxRate: import_zod.z.number().optional().describe("Overall tax rate as a percentage (e.g. 18 for 18%). Omit if not stated."),
-  taxAmount: import_zod.z.number().optional().describe("Total tax amount applied to the invoice as a plain number"),
-  discountAmount: import_zod.z.number().optional().describe("Total discount applied as a plain number"),
+  taxAmount: import_zod.z.number().optional().describe("Total tax amount applied to the invoice."),
+  discountAmount: import_zod.z.number().optional().describe("Total discount applied."),
   // Optional — subscription
   billingFrequency: import_zod.z.enum(["daily", "weekly", "monthly", "quarterly", "yearly"]).optional().describe("How often the subscription is billed. Only populate if document mentions recurring billing. Omit otherwise."),
   // Optional — misc
   summary: import_zod.z.string().optional().describe("A concise 5-8 word human-readable summary describing vendor and purpose"),
   lineItems: import_zod.z.array(ZInvoiceLineItem).optional().describe("All line items found in the invoice")
 });
+var BAD = /* @__PURE__ */ new Set(["null", "undefined", "unknown", "missing", "n/a", "none", "-", "--", "not found", "not available", ""]);
+function cleanNullStrings(obj) {
+  if (typeof obj === "string") {
+    return BAD.has(obj.trim().toLowerCase()) ? null : obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(cleanNullStrings);
+  }
+  if (obj !== null && typeof obj === "object") {
+    return Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [k, cleanNullStrings(v)])
+    );
+  }
+  return obj;
+}
 var ZExtractionOutput = import_zod.z.object({
-  totalPages: import_zod.z.number().describe("Total number of pages in the PDF document"),
-  totalInvoices: import_zod.z.number().describe("Total number of individual invoices detected across all pages"),
-  data: import_zod.z.array(ZInvoiceData).describe("One entry per detected invoice in document order")
-});
+  totalPages: import_zod.z.number(),
+  totalInvoices: import_zod.z.number(),
+  data: import_zod.z.array(ZInvoiceData)
+}).transform((output) => cleanNullStrings(output));
 
 // src/prompt.ts
 var BASE_EXTRACTION_PROMPT = `
@@ -208,6 +223,15 @@ You are an expert in structured data extraction. Your task is to extract informa
 - If any field's information is missing, unknown, or cannot be determined, return its value as null.
 - **Do not use substitutes such as "unknown," "missing," or any other placeholder for missing or unknown data. The value **must** always be explicitly null.
 -There may be multiple invoices in a single PDF \u2014 detect each one separately
+- The value must be actual JSON null, not the text "null" in quotes.
+Dates:
+- Return dates in ISO 8601 format (YYYY-MM-DD) only.
+Number fields:
+- Never return "null", "0" as a substitute for missing, or any string for a number field.
+Amounts:
+- All monetary amounts must be returned in minor units (e.g. cents). Multiply decimal values by 100 and round to the nearest integer (e.g. $12.50 \u2192 1250).
+vendorName:
+- must be first letter of each word capital, rest are lowercase
 `;
 
 // src/lib/parseCredentials.ts
