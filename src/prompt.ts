@@ -12,4 +12,6 @@ Number fields:
 - Never return "null", "0" as a substitute for missing, or any string for a number field.
 Amounts:
 - All monetary amounts must be returned in minor units (e.g. cents). Multiply decimal values by 100 and round to the nearest integer (e.g. $12.50 → 1250).
+vendorName:
+- must be first letter of each word capital, rest are lowercase
 `;
