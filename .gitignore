@@ -3,3 +3,4 @@ node_modules
 .vscode
 *.pdf
 demo.ts
+pnpm-lock.yaml
