@@ -4,3 +4,4 @@ node_modules
 *.pdf
 demo.ts
 pnpm-lock.yaml
+.npmrc
