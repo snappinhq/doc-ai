@@ -392,7 +392,7 @@ var SnappinDocAI = class {
     try {
       const normalizeStart = Date.now();
       normalizeResult = await (0, import_ai.generateText)({
-        model: this.google("gemini-3.1-flash-lite"),
+        model: this.google("gemini-2.5-flash-lite"),
         topP: 0,
         maxOutputTokens: 4e3,
         system: BASE_EXTRACTION_PROMPT,
