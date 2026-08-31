@@ -55,6 +55,8 @@ export const ZInvoiceData = z.object({
     // Optional — misc
     summary: z.string().optional().describe("A concise 5-8 word human-readable summary describing vendor and purpose"),
     lineItems: z.array(ZInvoiceLineItem).optional().describe("All line items found in the invoice"),
+
+    // pages: z.array(z.number()).optional().describe("Page numbers where this invoice appears (1-indexed). Example: [1, 2] means pages 1 and 2"),
 });
 
 const BAD = new Set(["null", "undefined", "unknown", "missing", "n/a", "none", "-", "--", "not found", "not available", ""])
