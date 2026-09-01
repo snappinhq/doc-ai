@@ -30,6 +30,11 @@ export const ZInvoiceData = z.object({
     paymentLast4Digits: z.string().optional().describe("Last 4 digits of the card or account used for payment. Omit if not present."),
 
     // Optional — vendor
+    vendorStreetAddress: z.string().optional().describe("Street address of the vendor/seller. Omit city, state and country."),
+    vendorCity: z.string().optional().describe("City of the vendor/seller. Omit state and country."),
+    vendorState: z.string().optional().describe("State or province of the vendor/seller. Omit city and country."),
+    vendorPostalCode: z.string().optional().describe("Postal or ZIP code of the vendor/seller.."),
+    vendorCountry: z.string().optional().describe("Country of the vendor/seller."),
     vendorAddress: z.string().optional().describe("Full mailing address of the vendor/seller"),
     vendorEmail: z.string().optional().describe("Email address of the vendor, if present"),
     vendorWebsite: z.string().optional().describe("Website URL of the vendor, if present"),

@@ -473,8 +473,12 @@ interface CleanPage {
 interface CleanedTextractOutput {
     totalPages: number;
     pages: CleanPage[];
-    /** Flat readable text used as Gemini prompt input */
+    linesWithPages: LineWithPage[];
     text: string;
+}
+interface LineWithPage {
+    text: string;
+    page: number;
 }
 
 declare const DocAIErrorCode: {
@@ -512,6 +516,7 @@ interface TextractConfig {
         accessKeyId: string;
         secretAccessKey: string;
     };
+    s3Bucket: string;
 }
 interface VertexConfig {
     projectId: string;
@@ -524,11 +529,14 @@ interface SnappinDocAIConfig {
 }
 interface ExtractionOptions {
     featureTypes?: ("TABLES" | "FORMS" | "SIGNATURES" | "LAYOUT")[];
+    /** Pass the existing S3 key if the file is already stored in your S3 bucket */
+    s3ObjectKey?: string;
 }
 interface ExtractionResult {
     totalPages: number;
     totalInvoices: number;
     data: InvoiceData[];
+    documents: DocumentPage[];
     usage: {
         inputTokens: number;
         outputTokens: number;
@@ -544,13 +552,22 @@ interface ExtractionResult {
         pipeline: "textract_then_gemini";
     };
 }
+interface DocumentPage {
+    invoiceNumber: string;
+    pages: number[];
+    pageRange: string;
+    isDuplicate?: boolean;
+    duplicateOfIndex?: number;
+}
 declare class SnappinDocAI {
     protected readonly textractClient: TextractClient;
     protected readonly google: ReturnType<typeof createVertex>;
+    protected readonly s3Bucket: string;
     constructor({ vertex, textract }: SnappinDocAIConfig);
-    extract(buffer: Buffer | Uint8Array, options?: ExtractionOptions): Promise<ExtractionResult>;
+    extract(options?: ExtractionOptions): Promise<ExtractionResult>;
     private _getMissingFields;
-    private _runTextract;
+    private _runTextractAsyncS3;
+    private _pollJobResults;
 }
 
-export { type CleanedTextractOutput, DocAIError, DocAIErrorCode, type ExtractionOptions, type ExtractionResult, type InvoiceData, type InvoiceLineItem, SnappinDocAI, type SnappinDocAIConfig, type TextractConfig, type VertexConfig, ZExtractionOutput, ZInvoiceData, ZInvoiceLineItem };
+export { type CleanedTextractOutput, DocAIError, DocAIErrorCode, type DocumentPage, type ExtractionOptions, type ExtractionResult, type InvoiceData, type InvoiceLineItem, SnappinDocAI, type SnappinDocAIConfig, type TextractConfig, type VertexConfig, ZExtractionOutput, ZInvoiceData, ZInvoiceLineItem };

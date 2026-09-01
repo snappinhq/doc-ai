@@ -31,28 +31,34 @@ module.exports = __toCommonJS(index_exports);
 var import_client_textract = require("@aws-sdk/client-textract");
 var import_google_vertex = require("@ai-sdk/google-vertex");
 var import_ai = require("ai");
-var import_pdf_lib = require("pdf-lib");
 
 // src/lib/textract.cleaner.ts
 function cleanTextractOutput(blocks) {
   const blockMap = /* @__PURE__ */ new Map();
+  const pageMap = /* @__PURE__ */ new Map();
   for (const b of blocks) {
     if (b.Id) blockMap.set(b.Id, b);
+    const pageNum = b.Page ?? 1;
+    if (!pageMap.has(pageNum)) {
+      pageMap.set(pageNum, []);
+    }
+    pageMap.get(pageNum).push(b);
   }
-  const pageBlocks = blocks.filter((b) => b.BlockType === "PAGE");
-  const totalPages = pageBlocks.length || 1;
-  const pages = pageBlocks.map((pageBlock) => {
-    const pageNum = pageBlock.Page ?? 1;
-    const childIds = getChildIds(pageBlock);
+  const sortedPageNumbers = Array.from(pageMap.keys()).sort((a, b) => a - b);
+  const totalPages = sortedPageNumbers.length || 1;
+  const linesWithPages = [];
+  const pages = sortedPageNumbers.map((pageNum) => {
+    const pageBlocks = pageMap.get(pageNum) ?? [];
     const lines = [];
     const tables = [];
     const forms = {};
-    for (const childId of childIds) {
-      const child = blockMap.get(childId);
-      if (!child) continue;
+    for (const child of pageBlocks) {
       switch (child.BlockType) {
         case "LINE":
-          if (child.Text) lines.push(child.Text);
+          if (child.Text) {
+            lines.push(child.Text);
+            linesWithPages.push({ text: child.Text, page: pageNum });
+          }
           break;
         case "TABLE":
           extractTable(child, blockMap, tables);
@@ -67,15 +73,32 @@ function cleanTextractOutput(blocks) {
     }
     return { page: pageNum, lines, tables, forms };
   });
-  if (pages.length === 0) {
-    const lines = blocks.filter((b) => b.BlockType === "LINE" && b.Text).map((b) => b.Text);
-    pages.push({ page: 1, lines, tables: [], forms: {} });
-  }
   return {
     totalPages,
     pages,
+    linesWithPages,
     text: renderCleanText(pages)
   };
+}
+function renderCleanText(pages) {
+  return pages.map((p) => {
+    const parts = [`=== START OF PAGE ${p.page} ===`];
+    if (p.lines.length) parts.push(p.lines.join("\n"));
+    if (Object.keys(p.forms).length) {
+      parts.push("\n[FORM FIELDS]");
+      for (const [k, v] of Object.entries(p.forms)) {
+        parts.push(`${k}: ${v}`);
+      }
+    }
+    for (const table of p.tables) {
+      parts.push("\n[TABLE]");
+      for (const row of table) {
+        parts.push(`| ${row.join(" | ")} |`);
+      }
+    }
+    parts.push(`=== END OF PAGE ${p.page} ===`);
+    return parts.join("\n");
+  }).join("\n\n");
 }
 function getChildIds(block) {
   return block.Relationships?.filter((r) => r.Type === "CHILD").flatMap((r) => r.Ids ?? []) ?? [];
@@ -123,25 +146,6 @@ function extractKVPair(keyBlock, blockMap) {
     }
   }
   return { key, value };
-}
-function renderCleanText(pages) {
-  return pages.map((p) => {
-    const parts = [`=== PAGE ${p.page} ===`];
-    if (p.lines.length) parts.push(p.lines.join("\n"));
-    if (Object.keys(p.forms).length) {
-      parts.push("\n[FORM FIELDS]");
-      for (const [k, v] of Object.entries(p.forms)) {
-        parts.push(`${k}: ${v}`);
-      }
-    }
-    for (const table of p.tables) {
-      parts.push("\n[TABLE]");
-      for (const row of table) {
-        parts.push(`| ${row.join(" | ")} |`);
-      }
-    }
-    return parts.join("\n");
-  }).join("\n\n");
 }
 
 // src/templates/invoice.ts
@@ -193,6 +197,7 @@ var ZInvoiceData = import_zod.z.object({
   // Optional — misc
   summary: import_zod.z.string().optional().describe("A concise 5-8 word human-readable summary describing vendor and purpose"),
   lineItems: import_zod.z.array(ZInvoiceLineItem).optional().describe("All line items found in the invoice")
+  // pages: z.array(z.number()).optional().describe("Page numbers where this invoice appears (1-indexed). Example: [1, 2] means pages 1 and 2"),
 });
 var BAD = /* @__PURE__ */ new Set(["null", "undefined", "unknown", "missing", "n/a", "none", "-", "--", "not found", "not available", ""]);
 function cleanNullStrings(obj) {
@@ -307,30 +312,6 @@ var DocAIError = class extends Error {
   }
 };
 var MAX_PDF_SIZE = 10 * 1024 * 1024;
-function validateBuffer(buffer) {
-  if (!buffer || buffer.length === 0) {
-    throw new DocAIError({ code: DocAIErrorCode.PDF_EMPTY });
-  }
-  if (buffer.length > MAX_PDF_SIZE) {
-    throw new DocAIError({ code: DocAIErrorCode.PDF_TOO_LARGE });
-  }
-  if (buffer[0] !== 37 || // %
-  buffer[1] !== 80 || // P
-  buffer[2] !== 68 || // D
-  buffer[3] !== 70) {
-    throw new DocAIError({ code: DocAIErrorCode.PDF_UNSUPPORTED_FORMAT });
-  }
-}
-function remapPdfError(err) {
-  const msg = err instanceof Error ? err.message.toLowerCase() : "";
-  if (msg.includes("encrypted") || msg.includes("password")) {
-    throw new DocAIError({ code: DocAIErrorCode.PDF_PASSWORD_PROTECTED, cause: err });
-  }
-  if (msg.includes("no pages") || msg.includes("page count")) {
-    throw new DocAIError({ code: DocAIErrorCode.PDF_NO_PAGES, cause: err });
-  }
-  throw new DocAIError({ code: DocAIErrorCode.PDF_CORRUPTED, cause: err });
-}
 function remapTextractError(err) {
   const name = err?.name ?? "";
   const type = err?.__type ?? "";
@@ -356,6 +337,7 @@ var REQUIRED_FIELDS = Object.entries(ZInvoiceData.shape).filter(([, field]) => !
 var SnappinDocAI = class {
   textractClient;
   google;
+  s3Bucket;
   constructor({ vertex, textract }) {
     this.textractClient = new import_client_textract.TextractClient({
       region: textract.region,
@@ -364,6 +346,7 @@ var SnappinDocAI = class {
         secretAccessKey: textract.credentials.secretAccessKey
       }
     });
+    this.s3Bucket = textract.s3Bucket;
     const credentials = parseCredentials(vertex.credentials);
     this.google = (0, import_google_vertex.createVertex)({
       project: vertex.projectId,
@@ -371,15 +354,23 @@ var SnappinDocAI = class {
       googleAuthOptions: { credentials }
     });
   }
-  async extract(buffer, options = {}) {
-    validateBuffer(buffer);
+  async extract(options = {}) {
     const totalStart = Date.now();
-    const { featureTypes = ["TABLES", "FORMS"] } = options;
+    const { featureTypes = ["TABLES", "FORMS"], s3ObjectKey } = options;
+    if (!s3ObjectKey) {
+      throw new DocAIError({
+        code: DocAIErrorCode.EXTRACTION_FAILED,
+        message: "s3ObjectKey is required for Textract multi-page processing."
+      });
+    }
     let blocks;
     let pageCount;
     try {
       const textractStart = Date.now();
-      const textractResult = await this._runTextract(buffer, featureTypes);
+      const textractResult = await this._runTextractAsyncS3(
+        s3ObjectKey,
+        featureTypes
+      );
       blocks = textractResult.blocks;
       pageCount = textractResult.pageCount;
       var textractDurationMs = Date.now() - textractStart;
@@ -415,8 +406,40 @@ var SnappinDocAI = class {
         missingFields
       });
     }
+    const seenInvoices = /* @__PURE__ */ new Map();
+    const documents = finalOutput.data.map((inv, index) => {
+      const invoiceNumber = inv.invoiceId ?? "UNKNOWN";
+      const matchedPages = /* @__PURE__ */ new Set();
+      const targetTokens = [
+        inv.invoiceId,
+        inv.vendorName,
+        inv.clientName
+      ].filter((val) => Boolean(val) && val.length > 2);
+      cleaned.linesWithPages.forEach(({ text, page }) => {
+        const matchesTarget = targetTokens.some(
+          (token) => text.toLowerCase().includes(token.toLowerCase())
+        );
+        if (matchesTarget) {
+          matchedPages.add(page);
+        }
+      });
+      const detectedPages = matchedPages.size > 0 ? Array.from(matchedPages).sort((a, b) => a - b) : [Math.min(index + 1, cleaned.totalPages)];
+      const isDuplicate = seenInvoices.has(invoiceNumber);
+      const duplicateOfIndex = seenInvoices.get(invoiceNumber);
+      if (!isDuplicate) {
+        seenInvoices.set(invoiceNumber, index);
+      }
+      return {
+        invoiceNumber,
+        pages: detectedPages,
+        pageRange: formatPageRange(detectedPages),
+        isDuplicate,
+        duplicateOfIndex
+      };
+    });
     return {
       ...finalOutput,
+      documents,
       usage: {
         inputTokens: normalizeResult.usage.inputTokens ?? 0,
         outputTokens: normalizeResult.usage.outputTokens ?? 0,
@@ -427,13 +450,13 @@ var SnappinDocAI = class {
         textractDurationMs,
         geminiDurationMs,
         pagesProcessed: pageCount,
-        textractCallCount: pageCount,
+        textractCallCount: 1,
         cleanedTextLength: cleaned.text.length,
         pipeline: "textract_then_gemini"
       }
     };
   }
-  // ── Private helpers ───────────────────────────────────────────────────────
+  // ── Private Helpers ───────────────────────────────────────────────────────
   _getMissingFields(data, requiredFields) {
     if (!data || data.length === 0) return requiredFields;
     return requiredFields.filter(
@@ -443,39 +466,72 @@ var SnappinDocAI = class {
       })
     );
   }
-  async _runTextract(buffer, featureTypes) {
-    let pdfDoc;
-    try {
-      pdfDoc = await import_pdf_lib.PDFDocument.load(buffer, { ignoreEncryption: false });
-    } catch (err) {
-      remapPdfError(err);
-    }
-    const pageCount = pdfDoc.getPageCount();
-    const allBlocks = [];
-    for (let i = 0; i < pageCount; i++) {
-      try {
-        const singlePage = await import_pdf_lib.PDFDocument.create();
-        const [copiedPage] = await singlePage.copyPages(pdfDoc, [i]);
-        singlePage.addPage(copiedPage);
-        const pageBytes = await singlePage.save();
-        const command = new import_client_textract.AnalyzeDocumentCommand({
-          Document: { Bytes: pageBytes },
-          FeatureTypes: featureTypes
-        });
-        const result = await this.textractClient.send(command);
-        const blocks = result.Blocks ?? [];
-        for (const block of blocks) {
-          if (block.Page !== void 0) block.Page = i + 1;
+  async _runTextractAsyncS3(s3ObjectKey, featureTypes) {
+    let pageCount = 1;
+    const startCommand = new import_client_textract.StartDocumentAnalysisCommand({
+      DocumentLocation: {
+        S3Object: {
+          Bucket: this.s3Bucket,
+          Name: s3ObjectKey
         }
-        allBlocks.push(...blocks);
-      } catch (err) {
-        if (err instanceof DocAIError) throw err;
-        remapTextractError(err);
+      },
+      FeatureTypes: featureTypes
+    });
+    const startResult = await this.textractClient.send(startCommand);
+    const jobId = startResult.JobId;
+    if (!jobId) {
+      throw new DocAIError({ code: DocAIErrorCode.EXTRACTION_FAILED });
+    }
+    const blocks = await this._pollJobResults(jobId);
+    return { blocks, pageCount };
+  }
+  async _pollJobResults(jobId) {
+    const blocks = [];
+    let nextToken;
+    let isFinished = false;
+    while (!isFinished) {
+      const getCommand = new import_client_textract.GetDocumentAnalysisCommand({
+        JobId: jobId,
+        NextToken: nextToken
+      });
+      const result = await this.textractClient.send(getCommand);
+      const status = result.JobStatus;
+      if (status === "FAILED") {
+        throw new Error("Textract async document analysis job failed.");
+      }
+      if (status === "IN_PROGRESS") {
+        await new Promise((resolve) => setTimeout(resolve, 1e3));
+        continue;
+      }
+      if (result.Blocks) {
+        blocks.push(...result.Blocks);
+      }
+      nextToken = result.NextToken;
+      if (!nextToken) {
+        isFinished = true;
       }
     }
-    return { blocks: allBlocks, pageCount };
+    return blocks;
   }
 };
+function formatPageRange(pages) {
+  if (!pages || pages.length === 0) return "1";
+  const sorted = Array.from(new Set(pages)).sort((a, b) => a - b);
+  const ranges = [];
+  let start = sorted[0];
+  let end = start;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === end + 1) {
+      end = sorted[i];
+    } else {
+      ranges.push(start === end ? `${start}` : `${start}-${end}`);
+      start = sorted[i];
+      end = start;
+    }
+  }
+  ranges.push(start === end ? `${start}` : `${start}-${end}`);
+  return ranges.join(", ");
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   DocAIError,

@@ -200,9 +200,10 @@ export class SnappinDocAI {
             });
 
             // Fallback to sequential index if no textual match occurs
+            const fallbackPage = Math.min(index + 1, cleaned.totalPages);
             const detectedPages = matchedPages.size > 0
                 ? Array.from(matchedPages).sort((a, b) => a - b)
-                : [Math.min(index + 1, cleaned.totalPages)];
+                : [fallbackPage];
 
             const isDuplicate = seenInvoices.has(invoiceNumber);
             const duplicateOfIndex = seenInvoices.get(invoiceNumber);
@@ -260,7 +261,6 @@ export class SnappinDocAI {
         s3ObjectKey: string,
         featureTypes: ExtractionOptions["featureTypes"]
     ): Promise<{ blocks: Block[]; pageCount: number }> {
-        let pageCount = 1;
         // 1. Kick off asynchronous text extraction via S3 reference
         const startCommand = new StartDocumentAnalysisCommand({
             DocumentLocation: {
@@ -282,6 +282,9 @@ export class SnappinDocAI {
         // 2. Poll Textract until completed and retrieve paginated output blocks
         const blocks = await this._pollJobResults(jobId);
 
+        const pageBlocks = blocks.filter(b => b.BlockType === "PAGE");
+        const pageCount = pageBlocks.length > 0 ? pageBlocks.length : 1;
+
         return { blocks, pageCount };
     }
 
@@ -289,6 +292,7 @@ export class SnappinDocAI {
         const blocks: Block[] = [];
         let nextToken: string | undefined;
         let isFinished = false;
+        let pollInterval = 500;
 
         while (!isFinished) {
             const getCommand = new GetDocumentAnalysisCommand({
@@ -304,7 +308,8 @@ export class SnappinDocAI {
             }
 
             if (status === "IN_PROGRESS") {
-                await new Promise((resolve) => setTimeout(resolve, 1000));
+                await new Promise((resolve) => setTimeout(resolve, pollInterval));
+                pollInterval = Math.min(pollInterval * 1.2, 2500);
                 continue;
             }
 

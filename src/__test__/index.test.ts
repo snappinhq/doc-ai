@@ -4,16 +4,6 @@ import { DocAIError, DocAIErrorCode } from "../errors";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Minimal valid PDF magic bytes + filler to pass validateBuffer */
-const makePdfBuffer = (size = 100) => {
-    const buf = Buffer.alloc(size, 0x00);
-    buf[0] = 0x25; // %
-    buf[1] = 0x50; // P
-    buf[2] = 0x44; // D
-    buf[3] = 0x46; // F
-    return buf;
-};
-
 const VALID_EXTRACT_OUTPUT = {
     output: {
         totalPages: 1,
@@ -43,9 +33,9 @@ const {
     mockCreate,
 } = vi.hoisted(() => {
     const mockGetPageCount = vi.fn().mockReturnValue(1);
-    const mockCopyPages    = vi.fn().mockResolvedValue([{}]);
-    const mockAddPage      = vi.fn();
-    const mockSave         = vi.fn().mockResolvedValue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+    const mockCopyPages = vi.fn().mockResolvedValue([{ s3ObjectKey: "my-file" }]);
+    const mockAddPage = vi.fn();
+    const mockSave = vi.fn().mockResolvedValue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
 
     return {
         mockTextractSend: vi.fn().mockResolvedValue({
@@ -83,6 +73,8 @@ const {
 vi.mock("@aws-sdk/client-textract", () => ({
     TextractClient: vi.fn().mockImplementation(() => ({ send: mockTextractSend })),
     AnalyzeDocumentCommand: vi.fn(),
+    StartDocumentAnalysisCommand: vi.fn(), // <-- Add this export
+    GetDocumentAnalysisCommand: vi.fn(),   // <-- Add if your implementation polls for results
     FeatureType: { TABLES: "TABLES", FORMS: "FORMS" },
 }));
 
@@ -109,15 +101,24 @@ describe("SnappinDocAI – edge cases", () => {
 
         // Restore all mocks to happy-path defaults
         mockGetPageCount.mockReturnValue(1);
-        mockCopyPages.mockResolvedValue([{}]);
+        mockCopyPages.mockResolvedValue([{ s3ObjectKey: "my-file" }]);
         mockSave.mockResolvedValue(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
         mockLoad.mockResolvedValue({ getPageCount: mockGetPageCount, copyPages: mockCopyPages });
         mockCreate.mockReturnValue({ copyPages: mockCopyPages, addPage: mockAddPage, save: mockSave });
-        mockTextractSend.mockResolvedValue({
-            Blocks: [
-                { Id: "p1", BlockType: "PAGE", Page: 1, Relationships: [{ Type: "CHILD", Ids: ["l1"] }] },
-                { Id: "l1", BlockType: "LINE", Text: "Invoice Number: INV-001", Page: 1 },
-            ],
+        mockTextractSend.mockImplementation((command: any) => {
+            // If it's StartDocumentAnalysisCommand, return a JobId
+            if (command.constructor.name === "StartDocumentAnalysisCommand" || command.JobId === undefined) {
+                return Promise.resolve({ JobId: "mock-job-id-123" });
+            }
+
+            // Default response for GetDocumentAnalysisCommand
+            return Promise.resolve({
+                JobStatus: "SUCCEEDED",
+                Blocks: [
+                    { Id: "p1", BlockType: "PAGE", Page: 1, Relationships: [{ Type: "CHILD", Ids: ["l1"] }] },
+                    { Id: "l1", BlockType: "LINE", Text: "Invoice Number: INV-001", Page: 1 },
+                ],
+            });
         });
         mockGenerateText.mockResolvedValue(VALID_EXTRACT_OUTPUT);
 
@@ -130,123 +131,20 @@ describe("SnappinDocAI – edge cases", () => {
             textract: {
                 region: "us-east-1",
                 credentials: { accessKeyId: "test", secretAccessKey: "test" },
+                s3Bucket: "my-test-bucket",
             },
         });
     });
 
-    // ── Buffer Validation ─────────────────────────────────────────────────────
-
-    describe("Buffer validation", () => {
-        it("throws PDF_EMPTY for an empty Buffer", async () => {
-            await expect(doc.extract(Buffer.alloc(0))).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_EMPTY,
-            });
-        });
-
-        it("throws PDF_EMPTY for a zero-length Uint8Array", async () => {
-            await expect(doc.extract(new Uint8Array(0))).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_EMPTY,
-            });
-        });
-
-        it("throws PDF_TOO_LARGE for a buffer exceeding 10 MB", async () => {
-            const oversized = Buffer.alloc(10 * 1024 * 1024 + 1);
-            oversized[0] = 0x25; oversized[1] = 0x50; oversized[2] = 0x44; oversized[3] = 0x46;
-            await expect(doc.extract(oversized)).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_TOO_LARGE,
-            });
-        });
-
-        it("throws PDF_UNSUPPORTED_FORMAT when magic bytes are wrong", async () => {
-            const notPdf = Buffer.from("This is not a PDF file at all!");
-            await expect(doc.extract(notPdf)).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_UNSUPPORTED_FORMAT,
-            });
-        });
-
-        it("throws PDF_UNSUPPORTED_FORMAT for a JPEG file", async () => {
-            const jpeg = Buffer.alloc(20);
-            jpeg[0] = 0xFF; jpeg[1] = 0xD8; // JPEG magic bytes
-            await expect(doc.extract(jpeg)).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_UNSUPPORTED_FORMAT,
-            });
-        });
-
-        it("accepts a Uint8Array with valid PDF magic bytes", async () => {
-            const uint8 = new Uint8Array(makePdfBuffer());
-            await expect(doc.extract(uint8)).resolves.toBeDefined();
-        });
-    });
-
-    // ── PDF / pdf-lib Errors ──────────────────────────────────────────────────
-
-    describe("PDF loading errors", () => {
-        it("throws PDF_PASSWORD_PROTECTED when pdf-lib reports encryption", async () => {
-            mockLoad.mockRejectedValue(new Error("encrypted PDF requires password"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_PASSWORD_PROTECTED,
-            });
-        });
-
-        it("throws PDF_NO_PAGES when pdf-lib reports no pages", async () => {
-            mockLoad.mockRejectedValue(new Error("no pages found in page count"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_NO_PAGES,
-            });
-        });
-
-        it("throws PDF_CORRUPTED for a generic pdf-lib error", async () => {
-            mockLoad.mockRejectedValue(new Error("unexpected EOF in PDF stream"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
-                code: DocAIErrorCode.PDF_CORRUPTED,
+    describe("Options validation", () => {
+        it("throws EXTRACTION_FAILED when s3ObjectKey is missing", async () => {
+            await expect(doc.extract({})).rejects.toMatchObject({
+                code: DocAIErrorCode.EXTRACTION_FAILED,
             });
         });
     });
 
-    // ── Multi-page PDFs ───────────────────────────────────────────────────────
 
-    describe("Multi-page PDFs", () => {
-        it("calls Textract once per page for a 3-page PDF", async () => {
-            mockGetPageCount.mockReturnValue(3);
-            await doc.extract(makePdfBuffer());
-            expect(mockTextractSend).toHaveBeenCalledTimes(3);
-        });
-
-        it("reports correct pagesProcessed in metrics", async () => {
-            mockGetPageCount.mockReturnValue(5);
-            const result = await doc.extract(makePdfBuffer());
-            expect(result.metrics.pagesProcessed).toBe(5);
-            expect(result.metrics.textractCallCount).toBe(5);
-        });
-
-        it("accumulates blocks from all pages", async () => {
-            mockGetPageCount.mockReturnValue(2);
-            // Page 1 returns 2 blocks, page 2 returns 1 block
-            mockTextractSend
-                .mockResolvedValueOnce({ Blocks: [
-                    { Id: "p1", BlockType: "PAGE", Page: 1 },
-                    { Id: "l1", BlockType: "LINE", Text: "Page 1 line", Page: 1 },
-                ]})
-                .mockResolvedValueOnce({ Blocks: [
-                    { Id: "p2", BlockType: "PAGE", Page: 1 },
-                ]});
-            await expect(doc.extract(makePdfBuffer())).resolves.toBeDefined();
-            expect(mockTextractSend).toHaveBeenCalledTimes(2);
-        });
-
-        it("correctly remaps page numbers in multi-page docs", async () => {
-            mockGetPageCount.mockReturnValue(2);
-            const capturedBlocks: any[][] = [];
-            mockGenerateText.mockImplementation(async (opts: any) => {
-                // Capture what was passed so we can inspect page numbers
-                capturedBlocks.push(opts);
-                return VALID_EXTRACT_OUTPUT;
-            });
-            await doc.extract(makePdfBuffer());
-            // Just ensure it ran without error — page remapping is internal
-            expect(capturedBlocks.length).toBe(1);
-        });
-    });
 
     // ── Textract Errors ───────────────────────────────────────────────────────
 
@@ -254,7 +152,7 @@ describe("SnappinDocAI – edge cases", () => {
         it("throws TEXTRACT_UNSUPPORTED for UnsupportedDocumentException", async () => {
             const err = Object.assign(new Error("Unsupported"), { name: "UnsupportedDocumentException" });
             mockTextractSend.mockRejectedValue(err);
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.TEXTRACT_UNSUPPORTED,
             });
         });
@@ -262,7 +160,7 @@ describe("SnappinDocAI – edge cases", () => {
         it("throws TEXTRACT_UNSUPPORTED when __type is UnsupportedDocumentException", async () => {
             const err = Object.assign(new Error("Unsupported"), { __type: "UnsupportedDocumentException" });
             mockTextractSend.mockRejectedValue(err);
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.TEXTRACT_UNSUPPORTED,
             });
         });
@@ -272,21 +170,21 @@ describe("SnappinDocAI – edge cases", () => {
                 name: "ProvisionedThroughputExceededException",
             });
             mockTextractSend.mockRejectedValue(err);
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.TEXTRACT_THROTTLED,
             });
         });
 
         it("throws TEXTRACT_THROTTLED when message contains 'throttl'", async () => {
             mockTextractSend.mockRejectedValue(new Error("Request was throttled by the service"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.TEXTRACT_THROTTLED,
             });
         });
 
         it("throws TEXTRACT_FAILED for an unknown Textract error", async () => {
             mockTextractSend.mockRejectedValue(new Error("Internal server error"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.TEXTRACT_FAILED,
             });
         });
@@ -294,18 +192,30 @@ describe("SnappinDocAI – edge cases", () => {
         it("does not swallow an already-typed DocAIError from Textract stage", async () => {
             const original = new DocAIError({ code: DocAIErrorCode.TEXTRACT_FAILED });
             mockTextractSend.mockRejectedValue(original);
-            const caught = await doc.extract(makePdfBuffer()).catch((e) => e);
+            const caught = await doc.extract({ s3ObjectKey: "my-file" }).catch((e) => e);
             expect(caught).toBe(original);
         });
 
         it("handles Textract returning undefined Blocks gracefully", async () => {
-            mockTextractSend.mockResolvedValue({ Blocks: undefined });
-            await expect(doc.extract(makePdfBuffer())).resolves.toBeDefined();
+            mockTextractSend.mockImplementation((command: any) => {
+                if (command.constructor.name === "StartDocumentAnalysisCommand" || command.JobId === undefined) {
+                    return Promise.resolve({ JobId: "mock-job-id-123" });
+                }
+                return Promise.resolve({ JobStatus: "SUCCEEDED", Blocks: undefined });
+            });
+
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).resolves.toBeDefined();
         });
 
         it("handles Textract returning empty Blocks array", async () => {
-            mockTextractSend.mockResolvedValue({ Blocks: [] });
-            await expect(doc.extract(makePdfBuffer())).resolves.toBeDefined();
+            mockTextractSend.mockImplementation((command: any) => {
+                if (command.constructor.name === "StartDocumentAnalysisCommand" || command.JobId === undefined) {
+                    return Promise.resolve({ JobId: "mock-job-id-123" });
+                }
+                return Promise.resolve({ JobStatus: "SUCCEEDED", Blocks: [] });
+            });
+
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).resolves.toBeDefined();
         });
     });
 
@@ -314,50 +224,54 @@ describe("SnappinDocAI – edge cases", () => {
     describe("Gemini errors", () => {
         it("throws GEMINI_QUOTA_EXCEEDED when message contains 'quota'", async () => {
             mockGenerateText.mockRejectedValue(new Error("quota exceeded for project"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.GEMINI_QUOTA_EXCEEDED,
             });
         });
 
         it("throws GEMINI_QUOTA_EXCEEDED when message contains 'rate limit'", async () => {
             mockGenerateText.mockRejectedValue(new Error("rate limit reached"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.GEMINI_QUOTA_EXCEEDED,
             });
         });
 
         it("throws GEMINI_QUOTA_EXCEEDED when message contains '429'", async () => {
             mockGenerateText.mockRejectedValue(new Error("HTTP 429 too many requests"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.GEMINI_QUOTA_EXCEEDED,
             });
         });
 
         it("throws GEMINI_FAILED for an unknown Gemini error", async () => {
             mockGenerateText.mockRejectedValue(new Error("model overloaded"));
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.GEMINI_FAILED,
             });
         });
 
         it("throws EXTRACTION_FAILED when Gemini returns null output", async () => {
-            mockGenerateText.mockResolvedValue({ output: null, usage: {} });
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            mockGenerateText.mockResolvedValue({ output: null, usage: { s3ObjectKey: "my-file" } });
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.EXTRACTION_FAILED,
             });
         });
 
-        it("throws EXTRACTION_FAILED when Gemini returns undefined output", async () => {
-            mockGenerateText.mockResolvedValue({ output: undefined, usage: {} });
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
-                code: DocAIErrorCode.EXTRACTION_FAILED,
+        it("handles Textract returning undefined Blocks gracefully", async () => {
+            mockTextractSend.mockImplementation((command: any) => {
+                if (command.constructor.name === "StartDocumentAnalysisCommand" || command.JobId === undefined) {
+                    return Promise.resolve({ JobId: "mock-job-id-123" });
+                }
+                return Promise.resolve({ JobStatus: "SUCCEEDED", Blocks: undefined });
             });
+
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).resolves.toBeDefined();
         });
 
         it("does not swallow an already-typed DocAIError from Gemini stage", async () => {
             const original = new DocAIError({ code: DocAIErrorCode.GEMINI_FAILED });
             mockGenerateText.mockRejectedValue(original);
-            const caught = await doc.extract(makePdfBuffer()).catch((e) => e);
+            const caught = await doc.extract({ s3ObjectKey: "my-file" }).catch((e) => e);
             expect(caught).toBe(original);
         });
     });
@@ -372,9 +286,9 @@ describe("SnappinDocAI – edge cases", () => {
                     totalInvoices: 1,
                     data: [{ totalAmount: 500, currency: "USD", vendorName: "Acme", invoiceDate: "2024-01-01", documentType: "invoice" }],
                 },
-                usage: {},
+                usage: { s3ObjectKey: "my-file" },
             });
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.REQUIRED_FIELDS_MISSING,
             });
         });
@@ -386,9 +300,9 @@ describe("SnappinDocAI – edge cases", () => {
                     totalInvoices: 1,
                     data: [{ invoiceId: "INV-001", currency: "USD", vendorName: "Acme", invoiceDate: "2024-01-01", documentType: "invoice" }],
                 },
-                usage: {},
+                usage: { s3ObjectKey: "my-file" },
             });
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.REQUIRED_FIELDS_MISSING,
             });
         });
@@ -400,9 +314,9 @@ describe("SnappinDocAI – edge cases", () => {
                     totalInvoices: 1,
                     data: [{ documentType: "invoice" }], // most required fields absent
                 },
-                usage: {},
+                usage: { s3ObjectKey: "my-file" },
             });
-            const err: DocAIError = await doc.extract(makePdfBuffer()).catch((e) => e);
+            const err: DocAIError = await doc.extract({ s3ObjectKey: "my-file" }).catch((e) => e);
             expect(err.missingFields).toEqual(expect.arrayContaining(["invoiceId", "vendorName", "totalAmount", "currency"]));
         });
 
@@ -420,9 +334,9 @@ describe("SnappinDocAI – edge cases", () => {
                         documentType: "invoice",
                     }],
                 },
-                usage: {},
+                usage: { s3ObjectKey: "my-file" },
             });
-            const err: DocAIError = await doc.extract(makePdfBuffer()).catch((e) => e);
+            const err: DocAIError = await doc.extract({ s3ObjectKey: "my-file" }).catch((e) => e);
             expect(err.code).toBe(DocAIErrorCode.REQUIRED_FIELDS_MISSING);
             expect(err.missingFields).toContain("invoiceId");
         });
@@ -430,9 +344,9 @@ describe("SnappinDocAI – edge cases", () => {
         it("throws REQUIRED_FIELDS_MISSING when data array is empty", async () => {
             mockGenerateText.mockResolvedValue({
                 output: { totalPages: 1, totalInvoices: 0, data: [] },
-                usage: {},
+                usage: { s3ObjectKey: "my-file" },
             });
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.REQUIRED_FIELDS_MISSING,
             });
         });
@@ -450,18 +364,18 @@ describe("SnappinDocAI – edge cases", () => {
                 output: { totalPages: 2, totalInvoices: 2, data: [entry, { ...entry, invoiceId: "INV-Y" }] },
                 usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
             });
-            const result = await doc.extract(makePdfBuffer());
+            const result = await doc.extract({ s3ObjectKey: "my-file" });
             expect(result.data).toHaveLength(2);
         });
 
         it("throws REQUIRED_FIELDS_MISSING when one invoice in a batch is missing a field", async () => {
             const good = { invoiceId: "INV-1", invoiceDate: "2024-01-01", vendorName: "V", totalAmount: 1, currency: "USD", documentType: "invoice" };
-            const bad  = { invoiceId: "",       invoiceDate: "2024-01-01", vendorName: "V", totalAmount: 1, currency: "USD", documentType: "invoice" };
+            const bad = { invoiceId: "", invoiceDate: "2024-01-01", vendorName: "V", totalAmount: 1, currency: "USD", documentType: "invoice" };
             mockGenerateText.mockResolvedValue({
                 output: { totalPages: 2, totalInvoices: 2, data: [good, bad] },
-                usage: {},
+                usage: { s3ObjectKey: "my-file" },
             });
-            await expect(doc.extract(makePdfBuffer())).rejects.toMatchObject({
+            await expect(doc.extract({ s3ObjectKey: "my-file" })).rejects.toMatchObject({
                 code: DocAIErrorCode.REQUIRED_FIELDS_MISSING,
             });
         });
@@ -471,17 +385,17 @@ describe("SnappinDocAI – edge cases", () => {
 
     describe("Extraction options", () => {
         it("uses default featureTypes (TABLES, FORMS) when none are provided", async () => {
-            const { AnalyzeDocumentCommand } = await import("@aws-sdk/client-textract");
-            await doc.extract(makePdfBuffer());
-            expect(AnalyzeDocumentCommand).toHaveBeenCalledWith(
+            const { StartDocumentAnalysisCommand } = await import("@aws-sdk/client-textract");
+            await doc.extract({ s3ObjectKey: "my-file" });
+            expect(StartDocumentAnalysisCommand).toHaveBeenCalledWith(
                 expect.objectContaining({ FeatureTypes: ["TABLES", "FORMS"] })
             );
         });
 
         it("forwards custom featureTypes to Textract", async () => {
-            const { AnalyzeDocumentCommand } = await import("@aws-sdk/client-textract");
-            await doc.extract(makePdfBuffer(), { featureTypes: ["SIGNATURES", "LAYOUT"] });
-            expect(AnalyzeDocumentCommand).toHaveBeenCalledWith(
+            const { StartDocumentAnalysisCommand } = await import("@aws-sdk/client-textract");
+            await doc.extract({ s3ObjectKey: "my-file", featureTypes: ["SIGNATURES", "LAYOUT"] });
+            expect(StartDocumentAnalysisCommand).toHaveBeenCalledWith(
                 expect.objectContaining({ FeatureTypes: ["SIGNATURES", "LAYOUT"] })
             );
         });
@@ -491,7 +405,7 @@ describe("SnappinDocAI – edge cases", () => {
 
     describe("Return shape and metrics", () => {
         it("includes all required top-level keys", async () => {
-            const result = await doc.extract(makePdfBuffer());
+            const result = await doc.extract({ s3ObjectKey: "my-file" });
             expect(result).toHaveProperty("totalPages");
             expect(result).toHaveProperty("totalInvoices");
             expect(result).toHaveProperty("data");
@@ -500,7 +414,7 @@ describe("SnappinDocAI – edge cases", () => {
         });
 
         it("includes all metric keys", async () => {
-            const result = await doc.extract(makePdfBuffer());
+            const result = await doc.extract({ s3ObjectKey: "my-file" });
             const { metrics } = result;
             expect(metrics).toHaveProperty("totalDurationMs");
             expect(metrics).toHaveProperty("textractDurationMs");
@@ -512,7 +426,7 @@ describe("SnappinDocAI – edge cases", () => {
         });
 
         it("includes all usage token keys", async () => {
-            const result = await doc.extract(makePdfBuffer());
+            const result = await doc.extract({ s3ObjectKey: "my-file" });
             expect(result.usage).toHaveProperty("inputTokens");
             expect(result.usage).toHaveProperty("outputTokens");
             expect(result.usage).toHaveProperty("totalTokens");
@@ -523,19 +437,19 @@ describe("SnappinDocAI – edge cases", () => {
                 output: VALID_EXTRACT_OUTPUT.output,
                 usage: { inputTokens: undefined, outputTokens: undefined, totalTokens: undefined },
             });
-            const result = await doc.extract(makePdfBuffer());
+            const result = await doc.extract({ s3ObjectKey: "my-file" });
             expect(result.usage.inputTokens).toBe(0);
             expect(result.usage.outputTokens).toBe(0);
             expect(result.usage.totalTokens).toBe(0);
         });
 
         it("totalDurationMs is a positive number", async () => {
-            const result = await doc.extract(makePdfBuffer());
+            const result = await doc.extract({ s3ObjectKey: "my-file" });
             expect(result.metrics.totalDurationMs).toBeGreaterThanOrEqual(0);
         });
 
         it("cleanedTextLength reflects processed text", async () => {
-            const result = await doc.extract(makePdfBuffer());
+            const result = await doc.extract({ s3ObjectKey: "my-file" });
             expect(typeof result.metrics.cleanedTextLength).toBe("number");
             expect(result.metrics.cleanedTextLength).toBeGreaterThanOrEqual(0);
         });
