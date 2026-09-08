@@ -151,6 +151,11 @@ var ZInvoiceData = z.object({
   paymentMethod: z.enum(["cash", "check", "credit_card", "debit_card", "paypal", "bank_transfer", "upi", "other"]).optional().describe("Payment method used or specified on the invoice. Omit if not mentioned."),
   paymentLast4Digits: z.string().optional().describe("Last 4 digits of the card or account used for payment. Omit if not present."),
   // Optional — vendor
+  vendorStreetAddress: z.string().optional().describe("Street address of the vendor/seller. Omit city, state and country."),
+  vendorCity: z.string().optional().describe("City of the vendor/seller. Omit state and country."),
+  vendorState: z.string().optional().describe("State or province of the vendor/seller. Omit city and country."),
+  vendorPostalCode: z.string().optional().describe("Postal or ZIP code of the vendor/seller.."),
+  vendorCountry: z.string().optional().describe("Country of the vendor/seller."),
   vendorAddress: z.string().optional().describe("Full mailing address of the vendor/seller"),
   vendorEmail: z.string().optional().describe("Email address of the vendor, if present"),
   vendorWebsite: z.string().optional().describe("Website URL of the vendor, if present"),
@@ -212,6 +217,7 @@ Amounts:
 - All monetary amounts must be returned in minor units (e.g. cents). Multiply decimal values by 100 and round to the nearest integer (e.g. $12.50 \u2192 1250).
 vendorName:
 - must be first letter of each word capital, rest are lowercase
+
 `;
 
 // src/lib/parseCredentials.ts
@@ -398,7 +404,8 @@ var SnappinDocAI = class {
           matchedPages.add(page);
         }
       });
-      const detectedPages = matchedPages.size > 0 ? Array.from(matchedPages).sort((a, b) => a - b) : [Math.min(index + 1, cleaned.totalPages)];
+      const fallbackPage = Math.min(index + 1, cleaned.totalPages);
+      const detectedPages = matchedPages.size > 0 ? Array.from(matchedPages).sort((a, b) => a - b) : [fallbackPage];
       const isDuplicate = seenInvoices.has(invoiceNumber);
       const duplicateOfIndex = seenInvoices.get(invoiceNumber);
       if (!isDuplicate) {
@@ -442,7 +449,6 @@ var SnappinDocAI = class {
     );
   }
   async _runTextractAsyncS3(s3ObjectKey, featureTypes) {
-    let pageCount = 1;
     const startCommand = new StartDocumentAnalysisCommand({
       DocumentLocation: {
         S3Object: {
@@ -458,12 +464,15 @@ var SnappinDocAI = class {
       throw new DocAIError({ code: DocAIErrorCode.EXTRACTION_FAILED });
     }
     const blocks = await this._pollJobResults(jobId);
+    const pageBlocks = blocks.filter((b) => b.BlockType === "PAGE");
+    const pageCount = pageBlocks.length > 0 ? pageBlocks.length : 1;
     return { blocks, pageCount };
   }
   async _pollJobResults(jobId) {
     const blocks = [];
     let nextToken;
     let isFinished = false;
+    let pollInterval = 500;
     while (!isFinished) {
       const getCommand = new GetDocumentAnalysisCommand({
         JobId: jobId,
@@ -475,7 +484,8 @@ var SnappinDocAI = class {
         throw new Error("Textract async document analysis job failed.");
       }
       if (status === "IN_PROGRESS") {
-        await new Promise((resolve) => setTimeout(resolve, 1e3));
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        pollInterval = Math.min(pollInterval * 1.2, 2500);
         continue;
       }
       if (result.Blocks) {
